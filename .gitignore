@@ -1,0 +1,12 @@
+# 凭据与本地状态（红线：绝不提交）
+.env
+token.json
+.ews_cache.json
+
+# Python
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# OS
+.DS_Store
