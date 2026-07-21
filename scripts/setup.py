@@ -82,9 +82,24 @@ def smtp_verify(cfg):
     return True
 
 
+ENV_TEMPLATE = """\
+SMTP_HOST=smtp.partner.outlook.cn
+SMTP_PORT=587
+SMTP_SECURE=false
+SMTP_USER=you@yourcompany.com
+SMTP_PASS=你的邮箱密码
+SMTP_FROM=you@yourcompany.com
+EWS_USER=you@yourcompany.com
+EWS_CLIENT_ID=04b07795-8ddb-461a-bbee-02f9e1bf7b46
+"""
+
+
 def main():
     if not os.path.exists(mc.env_path()):
-        sys.exit("未找到 %s\n请复制 .env.example 为 .env 并填入 SMTP 账号密码与 EWS_USER 后重跑。" % mc.env_path())
+        sys.exit("未找到 %s\n"
+                 "若包内有 .env.example，复制它为 .env 并填入账号密码后重跑；\n"
+                 "没有（部分分发渠道不打包该文件）则手动创建 .env，内容如下：\n\n%s"
+                 % (mc.env_path(), ENV_TEMPLATE))
     cfg = mc.load_config()
     mc.require(cfg, ["SMTP_HOST", "SMTP_USER", "SMTP_PASS", "EWS_USER"],
                "请编辑 %s 补齐后重跑 setup" % mc.env_path())

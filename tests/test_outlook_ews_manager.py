@@ -80,3 +80,13 @@ def test_resolve_id_bounds(tmp_path, monkeypatch):
     assert ews.resolve_id(2) == "B"
     assert ews.resolve_id(0) is None
     assert ews.resolve_id(3) is None
+
+
+def test_setup_missing_env_prints_template(home):
+    """无 .env 时 setup 应直接给出可照抄的配置模板（渠道包可能没有 .env.example）。"""
+    import setup
+    with pytest.raises(SystemExit) as exc:
+        setup.main()
+    msg = str(exc.value)
+    assert "SMTP_HOST=smtp.partner.outlook.cn" in msg
+    assert "EWS_USER=" in msg
