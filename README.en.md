@@ -43,6 +43,7 @@ python3 scripts/ews.py check --limit 10              # latest mail (* = unread)
 python3 scripts/ews.py search --from boss@corp.com   # server-side search
 python3 scripts/ews.py fetch 1                       # read body
 python3 scripts/ews.py download 1 --dir ~/Downloads  # attachments
+python3 scripts/ews.py reply 1 --body "Got it"       # native reply (--all, --attach)
 python3 scripts/ews.py forward 1 --to x@y.com        # preview; add --confirm-send to send
 python3 scripts/smtp.py send --to x@y.com --subject "Hi" --body "Hello"
 ```

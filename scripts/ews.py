@@ -126,6 +126,14 @@ def cmd_folders(args, session):
     for f in root.iter(T + "Folder"):
         print("- %s (%s 封)" % (f.findtext(T + "DisplayName"), f.findtext(T + "TotalCount")))
 
+def _noerror(resp, stage):
+    """EWS 响应检查：非 NoError 打印响应并以退出码 1 终止。"""
+    rc = ET.fromstring(resp).find(".//" + M + "ResponseCode")
+    if rc is None or rc.text != "NoError":
+        print("\n[%s 失败] EWS 返回:\n%s" % (stage, resp[:1000]))
+        sys.exit(1)
+
+
 def cmd_forward(args, session):
     change_key = None
     if args.id_is_raw:
@@ -193,12 +201,6 @@ def cmd_forward(args, session):
         print("\n[预览模式] 邮件未发送。确认无误后加 --confirm-send 重新运行以真正发送。")
         return
 
-    def _noerror(resp, stage):
-        rc = ET.fromstring(resp).find(".//" + M + "ResponseCode")
-        if rc is None or rc.text != "NoError":
-            print("\n[%s 失败] EWS 返回:\n%s" % (stage, resp[:1000]))
-            sys.exit(1)
-
     try:
         if not src_atts:
             # 无附件：单发 SendAndSaveCopy
@@ -234,6 +236,97 @@ def cmd_forward(args, session):
         print("\n[发送异常] %s" % e)
         sys.exit(1)
 
+def cmd_reply(args, session):
+    change_key = None
+    if args.id_is_raw:
+        iid = args.id
+    else:
+        try:
+            n = int(args.id)
+        except ValueError:
+            sys.exit("序号无效，请先 check/search 后用序号，或加 --id-is-raw 直接传 ItemId")
+        iid, change_key = _cache_entry(n)
+        if iid is None:
+            sys.exit("序号 %s 不在缓存中，请先运行 check 或 search" % n)
+    body_text = args.body or ""
+    if args.body_file:
+        body_text = open(args.body_file, encoding="utf-8").read()
+    if not body_text.strip():
+        sys.exit("回复正文为空，请用 --body 或 --body-file 提供内容")
+    if args.html or (args.body_file or "").endswith(".html"):
+        body_type = "HTML"      # 用户提供的 HTML，原样透传
+    else:
+        # 默认 HTML（同 forward）：纯文本转义 + 换行转 <br>，保护原邮件格式
+        body_type = "HTML"
+        body_text = soap.esc(body_text).replace("\n", "<br>")
+
+    # 本地附件（回复的附件是新文件，不涉及原邮件附件）
+    files = []
+    if args.attach:
+        for f in args.attach.split(","):
+            f = f.strip()
+            if not f:
+                continue
+            if not os.path.isfile(f):
+                sys.exit("附件文件不存在: %s" % f)
+            files.append(f)
+
+    # 读源邮件：主题/发件人/To/Cc，供预览展示（reply-all 的影响范围）
+    try:
+        root = get_item(session, iid, full=True)
+        src = message.parse_message(next(root.iter(T + "Message")))
+    except Exception as e:
+        sys.exit("读取源邮件失败：%s" % e)
+
+    kind = "回复全部" if args.all else "回复发件人"
+    print("=" * 60)
+    print("回复预览（未发送）")
+    print("=" * 60)
+    print("回复类型  : %s" % kind)
+    print("原邮件主题: %s" % src.subject)
+    print("原发件人  : %s <%s>" % (src.from_name, src.from_addr))
+    if args.all:
+        print("影响范围  : 原收件人 %s；原抄送 %s" % (
+            ", ".join(src.to_list) or "无", ", ".join(src.cc_list) or "无"))
+    print("正文格式  : %s" % body_type)
+    print("正文长度  : %d 字符" % len(body_text))
+    if files:
+        print("本地附件  : %s" % ", ".join(os.path.basename(f) for f in files))
+    print("-" * 60)
+    preview = body_text[:500] + ("...（截断）" if len(body_text) > 500 else "")
+    print("正文预览:\n%s" % preview)
+    print("-" * 60)
+
+    if not args.confirm_send:
+        print("\n[预览模式] 邮件未发送。确认无误后加 --confirm-send 重新运行以真正发送。")
+        return
+
+    try:
+        if not files:
+            resp = session.call(soap.reply_xml(
+                iid, body_text, body_type, change_key=change_key, reply_all=args.all))
+            _noerror(resp, "发送")
+        else:
+            resp = session.call(soap.reply_xml(
+                iid, body_text, body_type, change_key=change_key,
+                reply_all=args.all, disposition="SaveOnly"))
+            _noerror(resp, "创建草稿")
+            did, dck = message.parse_created_item_id(ET.fromstring(resp))
+            for f in files:
+                with open(f, "rb") as fh:
+                    content = base64.b64encode(fh.read()).decode()
+                resp = session.call(soap.create_attachment_xml(did, os.path.basename(f), content))
+                _noerror(resp, "挂载附件 " + os.path.basename(f))
+                did, dck = message.parse_attachment_root(ET.fromstring(resp))
+            resp = session.call(soap.send_item_xml(did, dck))
+            _noerror(resp, "发送")
+        print("\n[已发送] %s完成，已存入已发送文件夹。" % kind)
+    except SystemExit:
+        raise
+    except Exception as e:
+        print("\n[发送异常] %s" % e)
+        sys.exit(1)
+
 def main():
     ap = argparse.ArgumentParser(description="EWS 收信与转发工具（世纪互联 M365）")
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -243,6 +336,7 @@ def main():
     p = sub.add_parser("download"); p.add_argument("id", type=int); p.add_argument("--dir", required=True); p.set_defaults(fn=cmd_download)
     p = sub.add_parser("folders");  p.set_defaults(fn=cmd_folders)
     p = sub.add_parser("forward"); p.add_argument("id"); p.add_argument("--id-is-raw", action="store_true"); p.add_argument("--to", required=True); p.add_argument("--cc"); p.add_argument("--subject"); p.add_argument("--body"); p.add_argument("--body-file"); p.add_argument("--html", action="store_true"); p.add_argument("--confirm-send", action="store_true"); p.set_defaults(fn=cmd_forward)
+    p = sub.add_parser("reply");  p.add_argument("id"); p.add_argument("--id-is-raw", action="store_true"); p.add_argument("--all", action="store_true"); p.add_argument("--body"); p.add_argument("--body-file"); p.add_argument("--html", action="store_true"); p.add_argument("--attach"); p.add_argument("--confirm-send", action="store_true"); p.set_defaults(fn=cmd_reply)
     args = ap.parse_args()
     session = ews_session.open_session(mc.load_config())
     args.fn(args, session)

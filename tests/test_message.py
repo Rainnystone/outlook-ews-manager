@@ -2,6 +2,8 @@
 import os, sys
 import xml.etree.ElementTree as ET
 
+import pytest
+
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "scripts"))
 
 import message
@@ -207,3 +209,124 @@ def test_forward_defaults_to_html_body_preserving_line_breaks(home, capsys, monk
     assert 'NewBodyContent BodyType="HTML"' in sent
     assert "第一行<br>第二&lt;b&gt;行" in sent          # 换行保留 + HTML 注入被转义
     assert "第一行\n" not in sent
+
+
+def test_parse_message_to_cc_lists():
+    el = ET.fromstring(
+        '<t:Message xmlns:t="http://schemas.microsoft.com/exchange/services/2006/types">'
+        '<t:ItemId Id="X"/>'
+        '<t:ToRecipients>'
+        '<t:Mailbox><t:Name>张三</t:Name><t:EmailAddress>zs@corp.com</t:EmailAddress></t:Mailbox>'
+        '<t:Mailbox><t:EmailAddress>lisi@corp.com</t:EmailAddress></t:Mailbox>'
+        '</t:ToRecipients>'
+        '<t:CcRecipients>'
+        '<t:Mailbox><t:Name>王五</t:Name><t:EmailAddress>ww@corp.com</t:EmailAddress></t:Mailbox>'
+        '</t:CcRecipients>'
+        '</t:Message>')
+    m = message.parse_message(el)
+    assert m.to_list == ["张三 <zs@corp.com>", "lisi@corp.com"]
+    assert m.cc_list == ["王五 <ww@corp.com>"]
+
+
+# ---------- cmd_reply ----------
+
+REPLY_SRC_RESPONSE = """<?xml version="1.0"?>
+<soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/"
+ xmlns:t="http://schemas.microsoft.com/exchange/services/2006/types"
+ xmlns:m="http://schemas.microsoft.com/exchange/services/2006/messages">
+<soap:Body><m:GetItemResponse><m:ResponseMessages><m:GetItemResponseMessage ResponseClass="Success">
+<m:ResponseCode>NoError</m:ResponseCode><m:Items>
+<t:Message>
+<t:ItemId Id="ID_A" ChangeKey="k1"/>
+<t:Subject>三季度报表请审阅</t:Subject>
+<t:From><t:Mailbox><t:Name>老板</t:Name><t:EmailAddress>boss@corp.com</t:EmailAddress></t:Mailbox></t:From>
+<t:ToRecipients>
+<t:Mailbox><t:Name>李居真</t:Name><t:EmailAddress>me@corp.com</t:EmailAddress></t:Mailbox>
+<t:Mailbox><t:Name>同事甲</t:Name><t:EmailAddress>a@corp.com</t:EmailAddress></t:Mailbox>
+</t:ToRecipients>
+<t:CcRecipients>
+<t:Mailbox><t:Name>财务</t:Name><t:EmailAddress>fin@corp.com</t:EmailAddress></t:Mailbox>
+</t:CcRecipients>
+<t:DateTimeReceived>2026-07-20T09:00:00Z</t:DateTimeReceived>
+<t:Body BodyType="Text">请审阅附件报表。</t:Body>
+</t:Message>
+</m:Items></m:GetItemResponseMessage></m:ResponseMessages></m:GetItemResponse>
+</soap:Body></soap:Envelope>"""
+
+
+def _reply_args(**kw):
+    base = dict(id="1", id_is_raw=False, all=False, body="收到，谢谢", body_file=None,
+                html=False, attach=None, confirm_send=False)
+    base.update(kw)
+    return SimpleNamespace(**base)
+
+
+def test_cmd_reply_preview_shows_blast_radius_and_sends_nothing(home, capsys, monkeypatch, tmp_path):
+    monkeypatch.setattr(ews, "CACHE", str(tmp_path / "cache.json"))
+    f = tmp_path / "说明.txt"
+    f.write_bytes(b"hi")
+    stub = StubSession([FINDITEM_RESPONSE, REPLY_SRC_RESPONSE])
+    ews.cmd_check(SimpleNamespace(limit=10, unseen=False), stub)
+    capsys.readouterr()
+    ews.cmd_reply(_reply_args(all=True, attach=str(f)), stub)
+    out = capsys.readouterr().out
+    assert "回复全部" in out
+    assert "同事甲 <a@corp.com>" in out and "财务 <fin@corp.com>" in out   # 影响范围
+    assert "说明.txt" in out and "[预览模式]" in out
+    assert len(stub.sent) == 2    # 只有 check + 读源邮件，未发任何 CreateItem
+
+
+def test_cmd_reply_no_attach_single_call(home, capsys, monkeypatch, tmp_path):
+    monkeypatch.setattr(ews, "CACHE", str(tmp_path / "cache.json"))
+    stub = StubSession([FINDITEM_RESPONSE, REPLY_SRC_RESPONSE, _ok_response("CreateItem")])
+    ews.cmd_check(SimpleNamespace(limit=10, unseen=False), stub)
+    capsys.readouterr()
+    ews.cmd_reply(_reply_args(body="好的\n收到<b>", confirm_send=True), stub)
+    assert len(stub.sent) == 3
+    sent = stub.sent[2]
+    assert 'MessageDisposition="SendAndSaveCopy"' in sent
+    assert "<t:ReplyToItem>" in sent and 'ChangeKey="k1"' in sent
+    assert 'BodyType="HTML"' in sent and "好的<br>收到&lt;b&gt;" in sent
+    assert "[已发送]" in capsys.readouterr().out
+
+
+def test_cmd_reply_with_attachments_goes_draft_attach_send(home, capsys, monkeypatch, tmp_path):
+    monkeypatch.setattr(ews, "CACHE", str(tmp_path / "cache.json"))
+    f1 = tmp_path / "报表.xlsx"
+    f1.write_bytes(b"excel-bytes")
+    f2 = tmp_path / "note.pdf"
+    f2.write_bytes(b"pdf-bytes")
+    stub = StubSession([
+        FINDITEM_RESPONSE, REPLY_SRC_RESPONSE, CREATE_DRAFT_RESPONSE,
+        _attach_ok("CK_D2"), _attach_ok("CK_D3"), _ok_response("SendItem"),
+    ])
+    ews.cmd_check(SimpleNamespace(limit=10, unseen=False), stub)
+    capsys.readouterr()
+    ews.cmd_reply(_reply_args(attach="%s,%s" % (f1, f2), confirm_send=True), stub)
+    assert 'MessageDisposition="SaveOnly"' in stub.sent[2]
+    att = [x for x in stub.sent if "CreateAttachment" in x]
+    assert len(att) == 2
+    assert "报表.xlsx" in att[0] and base64.b64encode(b"excel-bytes").decode() in att[0]
+    assert "note.pdf" in att[1] and base64.b64encode(b"pdf-bytes").decode() in att[1]
+    assert "SendItem" in stub.sent[-1] and 'ChangeKey="CK_D3"' in stub.sent[-1]
+    assert "[已发送]" in capsys.readouterr().out
+
+
+def test_cmd_reply_missing_attachment_exits(home, monkeypatch, tmp_path):
+    monkeypatch.setattr(ews, "CACHE", str(tmp_path / "cache.json"))
+    stub = StubSession([FINDITEM_RESPONSE, REPLY_SRC_RESPONSE])
+    ews.cmd_check(SimpleNamespace(limit=10, unseen=False), stub)
+    with pytest.raises(SystemExit, match="不存在"):
+        ews.cmd_reply(_reply_args(attach="/nonexistent/a.pdf", confirm_send=True), stub)
+
+
+def test_cmd_reply_all_confirm_sends_reply_all_item(home, capsys, monkeypatch, tmp_path):
+    """--all --confirm-send 必须发 ReplyAllToItem（回归：曾静默降级为只回发件人）。"""
+    monkeypatch.setattr(ews, "CACHE", str(tmp_path / "cache.json"))
+    stub = StubSession([FINDITEM_RESPONSE, REPLY_SRC_RESPONSE, _ok_response("CreateItem")])
+    ews.cmd_check(SimpleNamespace(limit=10, unseen=False), stub)
+    capsys.readouterr()
+    ews.cmd_reply(_reply_args(all=True, confirm_send=True), stub)
+    sent = stub.sent[2]
+    assert "<t:ReplyAllToItem>" in sent
+    assert "<t:ReplyToItem>" not in sent

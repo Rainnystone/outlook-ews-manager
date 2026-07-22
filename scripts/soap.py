@@ -69,6 +69,8 @@ def get_item_xml(iid, full=False):
         shape = ('<t:BaseShape>Default</t:BaseShape><t:AdditionalProperties>'
                  '<t:FieldURI FieldURI="item:Body"/><t:FieldURI FieldURI="item:Attachments"/>'
                  '<t:FieldURI FieldURI="item:DateTimeReceived"/>'
+                 '<t:FieldURI FieldURI="message:ToRecipients"/>'
+                 '<t:FieldURI FieldURI="message:CcRecipients"/>'
                  '</t:AdditionalProperties><t:BodyType>Text</t:BodyType>')
     else:
         shape = '<t:BaseShape>Default</t:BaseShape>'
@@ -134,3 +136,27 @@ def send_item_xml(iid, change_key):
         '<m:ItemIds><t:ItemId Id="' + esc(iid) + '" ChangeKey="' + esc(change_key) + '"/></m:ItemIds>'
         '<m:SavedItemFolderId><t:DistinguishedFolderId Id="sentitems"/></m:SavedItemFolderId>'
         '</m:SendItem>')
+
+
+def reply_xml(iid, body_text, body_type="HTML", change_key=None, reply_all=False,
+              disposition="SendAndSaveCopy"):
+    """EWS 原生回复：ReplyToItem（回复发件人）/ ReplyAllToItem（回复全部）。
+    主题与收件人由服务器生成（RE: 原主题；reply→发件人，reply-all→原 To+Cc 去自己），
+    不在 XML 中出现。ReferenceItemId 必须带 ChangeKey（写操作要求）。
+    带附件时用 disposition="SaveOnly" 建草稿，走 create_attachment_xml + send_item_xml。"""
+    tag = "ReplyAllToItem" if reply_all else "ReplyToItem"
+    if body_type == "HTML":
+        safe_body = body_text.replace("]]>", "]]]]><![CDATA[>")
+        new_body = '<t:NewBodyContent BodyType="HTML"><![CDATA[%s]]></t:NewBodyContent>' % safe_body
+    else:
+        new_body = '<t:NewBodyContent BodyType="Text">%s</t:NewBodyContent>' % esc(body_text)
+    ck = ' ChangeKey="%s"' % esc(change_key) if change_key else ""
+    folder = "sentitems" if disposition == "SendAndSaveCopy" else "drafts"
+    return envelope(
+        '<m:CreateItem MessageDisposition="' + disposition + '">'
+        '<m:SavedItemFolderId><t:DistinguishedFolderId Id="' + folder + '"/></m:SavedItemFolderId>'
+        '<m:Items><t:%s>' % tag +
+        '<t:ReferenceItemId Id="%s"%s/>' % (esc(iid), ck) +
+        new_body +
+        '</t:%s></m:Items>' % tag +
+        '</m:CreateItem>')

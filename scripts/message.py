@@ -29,6 +29,8 @@ class Message:
     has_attachments: bool = False
     body: str = ""
     attachments: list = field(default_factory=list)
+    to_list: list = field(default_factory=list)
+    cc_list: list = field(default_factory=list)
 
 
 def _text(el, path):
@@ -49,6 +51,16 @@ def parse_attachment_root(root):
     return (el.get("RootItemId", ""), el.get("RootItemChangeKey", "")) if el is not None else ("", "")
 
 
+def _mailbox_list(el, path):
+    """解析 To/Cc 收件人列表为可显示字符串：'名字 <地址>' 或纯地址。"""
+    out = []
+    for mb in el.findall(path + "/" + T + "Mailbox"):
+        name = _text(mb, T + "Name")
+        addr = _text(mb, T + "EmailAddress")
+        out.append("%s <%s>" % (name, addr) if name else addr)
+    return [x for x in out if x]
+
+
 def parse_message(el):
     """把 <t:Message> 元素解析为 Message；缺字段给默认值，不抛异常。"""
     m = Message()
@@ -65,6 +77,8 @@ def parse_message(el):
     m.unread = _text(el, T + "IsRead") == "false"
     m.has_attachments = _text(el, T + "HasAttachments") == "true"
     m.body = _text(el, T + "Body").strip()
+    m.to_list = _mailbox_list(el, T + "ToRecipients")
+    m.cc_list = _mailbox_list(el, T + "CcRecipients")
     for a in el.findall(T + "Attachments/" + T + "FileAttachment"):
         aid = a.find(T + "AttachmentId")
         m.attachments.append(Attachment(

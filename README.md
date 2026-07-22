@@ -43,7 +43,8 @@ python3 scripts/ews.py check --limit 10              # 最新邮件（* 为未�
 python3 scripts/ews.py search --from boss@corp.com   # 服务端过滤搜索
 python3 scripts/ews.py fetch 1                       # 读正文
 python3 scripts/ews.py download 1 --dir ~/Downloads  # 下载附件
-python3 scripts/ews.py forward 1 --to x@y.com        # 预览；加 --confirm-send 才发送
+python3 scripts/ews.py reply 1 --body "收到"         # 原生回复（--all 回复全部，--attach 带附件）
+python3 scripts/ews.py forward 1 --to x@y.com        # 转发预览；加 --confirm-send 才发送
 python3 scripts/smtp.py send --to x@y.com --subject "主题" --body "正文"
 ```
 
