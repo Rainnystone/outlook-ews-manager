@@ -318,3 +318,15 @@ def test_cmd_reply_missing_attachment_exits(home, monkeypatch, tmp_path):
     ews.cmd_check(SimpleNamespace(limit=10, unseen=False), stub)
     with pytest.raises(SystemExit, match="不存在"):
         ews.cmd_reply(_reply_args(attach="/nonexistent/a.pdf", confirm_send=True), stub)
+
+
+def test_cmd_reply_all_confirm_sends_reply_all_item(home, capsys, monkeypatch, tmp_path):
+    """--all --confirm-send 必须发 ReplyAllToItem（回归：曾静默降级为只回发件人）。"""
+    monkeypatch.setattr(ews, "CACHE", str(tmp_path / "cache.json"))
+    stub = StubSession([FINDITEM_RESPONSE, REPLY_SRC_RESPONSE, _ok_response("CreateItem")])
+    ews.cmd_check(SimpleNamespace(limit=10, unseen=False), stub)
+    capsys.readouterr()
+    ews.cmd_reply(_reply_args(all=True, confirm_send=True), stub)
+    sent = stub.sent[2]
+    assert "<t:ReplyAllToItem>" in sent
+    assert "<t:ReplyToItem>" not in sent

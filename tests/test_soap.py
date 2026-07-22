@@ -166,3 +166,11 @@ def test_reply_xml_reply_all_switches_element():
     root = ET.fromstring(x)
     assert root.find(".//" + T + "ReplyAllToItem") is not None
     assert root.find(".//" + T + "ReplyToItem") is None
+
+
+def test_get_item_xml_full_requests_recipients():
+    # reply-all 预览依赖 To/Cc；显式请求，不依赖 Default shape 的服务器差异
+    root = ET.fromstring(soap.get_item_xml("ID1", full=True))
+    fields = [f.get("FieldURI") for f in root.findall(".//" + T + "AdditionalProperties/" + T + "FieldURI")]
+    assert "message:ToRecipients" in fields
+    assert "message:CcRecipients" in fields

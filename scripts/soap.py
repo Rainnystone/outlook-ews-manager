@@ -69,6 +69,8 @@ def get_item_xml(iid, full=False):
         shape = ('<t:BaseShape>Default</t:BaseShape><t:AdditionalProperties>'
                  '<t:FieldURI FieldURI="item:Body"/><t:FieldURI FieldURI="item:Attachments"/>'
                  '<t:FieldURI FieldURI="item:DateTimeReceived"/>'
+                 '<t:FieldURI FieldURI="message:ToRecipients"/>'
+                 '<t:FieldURI FieldURI="message:CcRecipients"/>'
                  '</t:AdditionalProperties><t:BodyType>Text</t:BodyType>')
     else:
         shape = '<t:BaseShape>Default</t:BaseShape>'

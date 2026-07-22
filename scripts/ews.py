@@ -304,11 +304,12 @@ def cmd_reply(args, session):
     try:
         if not files:
             resp = session.call(soap.reply_xml(
-                iid, body_text, body_type, change_key=change_key))
+                iid, body_text, body_type, change_key=change_key, reply_all=args.all))
             _noerror(resp, "发送")
         else:
             resp = session.call(soap.reply_xml(
-                iid, body_text, body_type, change_key=change_key, disposition="SaveOnly"))
+                iid, body_text, body_type, change_key=change_key,
+                reply_all=args.all, disposition="SaveOnly"))
             _noerror(resp, "创建草稿")
             did, dck = message.parse_created_item_id(ET.fromstring(resp))
             for f in files:
